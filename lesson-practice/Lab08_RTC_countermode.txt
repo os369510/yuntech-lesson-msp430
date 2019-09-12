@@ -1,0 +1,22 @@
+#include <msp430x54x.h>
+
+void main(void)
+{
+  WDTCTL = WDTPW + WDTHOLD;                 // Stop WDT
+  P5DIR |= BIT5;                            // Set P5.5 as output
+  RTCCTL01 = RTCTEV_3;
+  RTCPS0CTL = RT0PSDIV_7;                   // Set RTPS0 to /256
+  RTCPS1CTL = RT1IP_2 + RT1PSIE + RT1SSEL_3;// Set RT1IP to /4, enable
+                                            // RT1PS interrupt and select
+                                            // RTOPS output as clock
+  _BIS_SR(LPM3_bits + GIE);                 // Enter LPM3, enable interrupts
+}
+
+// Basic Timer Interrupt Service Routine
+#pragma vector=RTC_VECTOR
+__interrupt void RTC_ISR(void)
+{
+  P5OUT ^= BIT5;                            // Toggle P5.5
+  RTCCTL01 &= ~RTCTEVIFG;
+  RTCPS1CTL &= ~RT1PSIFG;
+}

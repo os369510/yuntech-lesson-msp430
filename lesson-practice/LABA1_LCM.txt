@@ -1,0 +1,119 @@
+#include  "msp430x54x.h"
+
+#define RSPIN   (0x04)           //P11.2
+#define RWPIN   (0x02)           //P11.1
+#define EPIN    (0x01)           //P11.0
+
+
+
+unsigned char XPOS,YPOS;
+
+void delay(unsigned int t)
+{  unsigned int i,j;
+   for(i=0;i<t;i++)
+      for(j=0;j<10;j++) ;
+        
+}
+
+void lcdwaitidle(void)
+{  P10DIR=0x00;
+   P11OUT &=~RSPIN;
+   P11OUT |=RWPIN;
+   P11OUT |=EPIN;
+   while((P10IN&0x80)==0x80);
+   P11OUT &=~EPIN;
+   P10DIR |=0Xff;
+}
+
+void lcdwcn(unsigned char c)
+{  P11OUT &=~RSPIN;
+   P11OUT &=~RWPIN;
+   P10OUT=c;
+   P11OUT |=EPIN;
+   _NOP();
+   P11OUT &=~EPIN;
+}
+
+void lcdwc(unsigned char c)
+{  lcdwaitidle();
+   lcdwcn(c);
+}
+
+void lcdwd(unsigned char d)
+{  lcdwaitidle();
+   P11OUT |=RSPIN;
+   P11OUT &=~RWPIN;
+   P10OUT=d;
+   P11OUT |=EPIN;
+   _NOP();
+   P11OUT &=~EPIN;
+}
+
+void lcdpos(void)
+{  XPOS&=0x0f;
+   YPOS&=0x03;
+   if(YPOS==0x00)
+      lcdwc(XPOS|0x80);
+   else if(YPOS==0x01)
+      lcdwc((XPOS+0x40)|0x80);
+}
+
+void lcdreset()
+{  delay(150); lcdwcn(0x38);
+   delay(50); lcdwcn(0x38);
+   delay(50); lcdwcn(0x38);
+   lcdwc(0x38);
+   lcdwc(0x08);
+   lcdwc(0x01);
+   lcdwc(0x06);
+   lcdwc(0x0c);
+}
+
+void lcdfill(unsigned char n)
+{
+   for(YPOS=0;YPOS<2;YPOS++)
+      for(XPOS=0;XPOS<16;XPOS++)
+      {  lcdpos();
+         lcdwd(n);  }
+}
+
+void lcdwda(unsigned char x,unsigned char y,unsigned char *s)
+{  YPOS=y;
+   for(XPOS=x;XPOS<16;XPOS++)
+   {  lcdpos();
+      lcdwd(*s);
+      s++;
+      delay(400);
+   }
+}
+
+main()
+{  unsigned char i;
+   WDTCTL = WDTPW + WDTHOLD;                 // Stop WDT
+   
+   // LCM Backlit enable
+   
+   P9DIR |= BIT6+BIT7;
+   P9DS |=BIT6+BIT7;
+   P9OUT &=~BIT7; //K
+   P9OUT |= BIT6; //A
+   //
+   P10OUT =0;
+   P11OUT =0;
+   P10DIR |=0XFF;
+   P11DIR |=0XFF;
+   
+   P11OUT &=~EPIN;
+   while(1)
+   {  lcdreset();
+      for(i=0x30;i<=0x3a;i++)
+      {  lcdfill(i);
+         delay(3500);
+      }
+      lcdfill(' ');
+      delay(2000);
+      lcdwda(0,0,"ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+      lcdwda(0,1,"ZYXWVUTSRQPONMLKJIHGFEDCBA");
+      delay(2000);
+   }
+}

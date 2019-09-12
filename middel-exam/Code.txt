@@ -1,0 +1,1006 @@
+/* --COPYRIGHT--,BSD_EX
+ * Copyright (c) 2012, Texas Instruments Incorporated
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ * *  Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ *
+ * *  Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * *  Neither the name of Texas Instruments Incorporated nor the names of
+ *    its contributors may be used to endorse or promote products derived
+ *    from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
+ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
+ * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ *******************************************************************************
+ * 
+ *                       MSP430 CODE EXAMPLE DISCLAIMER
+ *
+ * MSP430 code examples are self-contained low-level programs that typically
+ * demonstrate a single peripheral function or device feature in a highly
+ * concise manner. For this the code may rely on the device's power-on default
+ * register values and settings such as the clock configuration and care must
+ * be taken when combining code from several examples to avoid potential side
+ * effects. Also see www.ti.com/grace for a GUI- and www.ti.com/msp430ware
+ * for an API functional library-approach to peripheral configuration.
+ *
+ * --/COPYRIGHT--*/
+//******************************************************************************
+//  MSP430F54xA Demo - RTC_A in real time clock mode
+//
+//  Description: This program demonstrates the RTC mode by triggering an
+//  interrupt every second and minute. This code toggles P1.0 every second.
+//  This code recommends an external LFXT1 crystal for RTC accuracy.
+//  ACLK = LFXT1 = 32768Hz, MCLK = SMCLK = default DCO = 32 x ACLK = 1048576Hz
+//
+//                MSP430F54xA
+//             -----------------
+//        /|\ |              XIN|-
+//         |  |                 | 32kHz
+//         ---|RST          XOUT|-
+//            |                 |
+//            |            P1.0 |--> Toggles every second
+//            |                 |
+//
+//  W. Goh
+//  Texas Instruments Inc.
+//  April 2010
+//  Built with CCS version 4.2 and IAR Embedded Workbench Version: 4.21.8
+//******************************************************************************
+
+#include <msp430.h>
+
+volatile unsigned int results;
+
+#define RSPIN   (0x04)           //P11.2
+#define RWPIN   (0x02)           //P11.1
+#define EPIN    (0x01)           //P11.0
+
+unsigned char XPOS,YPOS;
+
+int i=0;
+unsigned char line1[16]={' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' '};
+unsigned char line2[16]={' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' '};
+char printt1[]={'N','o','v','.','1','4',' ','0','0',':','1','2',':','3','4',' '};
+char printt2[]={'D','e','c','.','2','5',' ','0','0',':','2','3',':','4','5',' '};
+int k;
+int flag_05=0,count_05=0;
+int P20_flag=0,P21_flag=0,P22_flag=0,P23_flag=0,P24_flag=0;
+int Clock_Mode=0; // 0: normal 1: setting clock 2: setting Alarm
+int Clock_Setting_Count=0; // 0: month , 1:day , 2: Hour , 3: Minute , 4: second
+int Year=0,Mon=0,Day=0,Week=0,Hour=0,Min=0,Sec=0;
+int aYear=0,aMon=0,aDay=0,aWeek=0,aHour=0,aMin=0,aSec=0;
+int ADC_compare=0,ADC_onceflag=0;
+int ADC_a=0,ADC_d=0;
+int ADC_changecount=0;
+int timeout_flag=0;
+int count_10=0;
+int Alarm_once=0;
+
+void Mode_1(void);
+void Mode_2(void);
+void Mode_3(void);
+int HexToInt(int);
+int IntToHex(int);
+int MonAndDayCheck(int);
+
+void delay(unsigned int t)  //delay
+{  unsigned int i,j;
+   for(i=0;i<t;i++)
+      for(j=0;j<10;j++) ;
+
+}
+
+//===================LCD==================//
+
+void lcdwaitidle(void)
+{  P10DIR=0x00;
+   P11OUT &=~RSPIN;
+   P11OUT |=RWPIN;
+   P11OUT |=EPIN;
+   while((P10IN&0x80)==0x80);
+   P11OUT &=~EPIN;
+   P10DIR |=0Xff;
+}
+
+void lcdwcn(unsigned char c)
+{  P11OUT &=~RSPIN;
+   P11OUT &=~RWPIN;
+   P10OUT=c;
+   P11OUT |=EPIN;
+   _NOP();
+   P11OUT &=~EPIN;
+}
+
+void lcdwc(unsigned char c)
+{  lcdwaitidle();
+   lcdwcn(c);
+}
+
+void lcdwd(unsigned char d)
+{  lcdwaitidle();
+   P11OUT |=RSPIN;
+   P11OUT &=~RWPIN;
+   P10OUT=d;
+   P11OUT |=EPIN;
+   _NOP();
+   P11OUT &=~EPIN;
+}
+
+void lcdpos(void)
+{  XPOS&=0x0f;
+   YPOS&=0x03;
+   if(YPOS==0x00)
+      lcdwc(XPOS|0x80);
+   else if(YPOS==0x01)
+      lcdwc((XPOS+0x40)|0x80);
+}
+
+void lcdreset()
+{  delay(150); lcdwcn(0x38);
+   delay(50); lcdwcn(0x38);
+   delay(50); lcdwcn(0x38);
+   lcdwc(0x38);
+   lcdwc(0x08);
+   lcdwc(0x01);
+   lcdwc(0x06);
+   lcdwc(0x0c);
+}
+
+void lcdfill(unsigned char n)
+{
+   for(YPOS=0;YPOS<2;YPOS++)
+      for(XPOS=0;XPOS<16;XPOS++)
+      {  lcdpos();
+         lcdwd(n);  }
+}
+
+void lcdwda(unsigned char x,unsigned char y,unsigned char *s)
+{  YPOS=y;
+   for(XPOS=x;XPOS<16;XPOS++)
+   {  lcdpos();
+      lcdwd(*s);
+      s++;
+ //     delay(400);
+   }
+}
+
+char NumberToChar(int num){
+  char ch;
+  ch=0x30+num;
+  return ch;
+}
+
+int main(void)
+{
+  WDTCTL = WDTPW + WDTHOLD;                 // Stop Watchdog Timer
+
+  /***************************/
+  /************LCD************/
+  /***************************/
+  // LCM Backlit enable
+  P9DIR |= BIT6+BIT7;
+  P9DS |=BIT6+BIT7;
+  P9OUT &=~BIT7; //K
+  P9OUT |= BIT6; //A
+  //
+  P10OUT =0;
+  P11OUT =0;
+  P10DIR |=0XFF;
+  P11DIR |=0XFF;
+  P11OUT &=~EPIN;
+
+  /***********************************/
+  /************GPIO enable************/
+  /***********************************/
+  P2SEL= 0;
+  P2DIR&= ~(BIT0 + BIT1 + BIT2 + BIT3 + BIT4) ;
+  P2REN&= ~(BIT0 + BIT1 + BIT2 + BIT3 + BIT4) ;
+  P5DIR|= BIT4 + BIT5;
+  P5OUT|=BIT4 + BIT5;
+  P2DIR &= ~(BIT0 + BIT1 + BIT2 + BIT3 + BIT4) ;
+  P2REN |= (BIT0 + BIT1 + BIT2 + BIT3 + BIT4);
+  P2OUT |= (BIT0 + BIT1 + BIT2 + BIT3 + BIT4);
+  P2IE  |= (BIT0 + BIT1 + BIT2 + BIT3 + BIT4);
+  P2IES |= (BIT0 + BIT1 + BIT2 + BIT3 + BIT4);               //interrupt trigger in High to Low
+
+  /**********************************/
+  /************ADC enable************/
+  /**********************************/
+  ADC12CTL0 = ADC12ON+ADC12SHT02+ADC12REFON+ADC12REF2_5V;    // Internal ref = 2.5V
+  ADC12CTL1 = ADC12SHP;                                      // enable sample timer
+  ADC12CTL2 = ADC12RES_2+ADC12REFOUT;                        //12BIT,REF OUT continuous
+  ADC12MCTL0 = ADC12SREF_1 + ADC12INCH_15;                   // ADC i/p ch A15
+  REFCTL0 &= ~REFMSTR;
+  ADC12IE = 0x001;                          // ADC_IFG upon conv result-ADCMEMO
+  __delay_cycles(35);                       // 35us delay to allow Ref to settle
+                                            // based on default DCO frequency.
+                                            // See Datasheet for typical settle time.
+  P5SEL |= BIT0;                            // REF out
+  ADC12CTL0 |= ADC12ENC;
+  ADC_compare=ADC12MEM0;                    // ADC compare value initial
+
+  /**********************************/
+  /************RTC enable************/
+  /**********************************/
+  // Initialize LFXT1
+  P7SEL |= 0x03;                            // Select XT1
+  UCSCTL6 &= ~(XT1OFF);                     // XT1 On
+  UCSCTL6 |= XCAP_3;                        // Internal load cap
+  // Loop until XT1,XT2 & DCO fault flag is cleared
+  do
+  {
+    UCSCTL7 &= ~(XT2OFFG + XT1LFOFFG + XT1HFOFFG + DCOFFG);
+                                            // Clear XT2,XT1,DCO fault flags
+    SFRIFG1 &= ~OFIFG;                      // Clear fault flags
+  }while (SFRIFG1&OFIFG);                   // Test oscillator fault flag
+
+  // Configure RTC_A
+  RTCCTL01 |=  RTCBCD + RTCHOLD + RTCMODE + RTCAIE +RTCAIFG;
+//  RTCCTL01 |= (BIT3+BIT2);
+//  RTCCTL01 &= ~(BIT3+BIT2);
+                                            // RTC enable, BCD mode, RTC hold
+                                            // enable RTC user alarm interrupt
+  //RTC time setting
+  RTCYEAR = 0x2013;                         // Year = 0x2010
+  RTCMON = 0x11;                            // Month = 0x04 = April
+  RTCDAY = 0x24;                            // Day = 0x05 = 5th
+  RTCDOW = 0x01;                            // Day of week = 0x01 = Monday
+  RTCHOUR = 0x00;                           // Hour = 0x10
+  RTCMIN = 0x22;                            // Minute = 0x32
+  RTCSEC = 0x55;                            // Seconds = 0x45
+  Year=RTCYEAR;
+  Mon=RTCMON;
+  Day=RTCDAY;
+  Week=RTCDOW;
+  Hour=RTCHOUR;
+  Min=RTCMIN;
+  Sec=RTCSEC;
+  //RTC Alarm setting
+  RTCADOWDAY = 0x0;                         // RTC Day of week alarm = unused
+  RTCADAY = 0x0;                            // RTC Day Alarm = unused
+  RTCAHOUR = 0x00+RTCAE;                    // RTC Hour Alarm
+  RTCAMIN = 0x23+RTCAE;                     // RTC Minute Alarm
+  // char printt2[]={'D','e','c','.','2','5',' ','0','0',':','2','3',':','4','5',' '};
+  aYear=RTCYEAR;
+  aMon=0x12;
+  aDay=0x25;
+  aWeek=RTCADOWDAY;
+  aHour=0x00;
+  aMin=0x23;
+  aSec=0x45;
+  // we select RT1PS interrupt , and this frequency is 32768/256/32=4Hz
+  // here we only enable 2 interrupt (PT1 Prescale interrupt and RTC user alarm interrupt)
+  UCSCTL4|=BIT9;                    //  select ACLK source ,
+  UCSCTL4&=~(BIT8+BITA);            //         ACLK source = REFOCLK(32768Hz).
+  UCSCTL5&=~(BITC+BITD+BITE);       //select Divides ACLK=PEFOCLK/1=32768 Hz.
+  RTCPS0CTL=0x391C;                 // source select ACLK (32768Hz) , /256 (RT0PSDIV) , Hold , /256 (PT0IP) , PT0PS interrupt is disable
+  RTCPS1CTL=0xB913;                 // source select RT0PS (32768/256)Hz , Hold , /32 (PT1IP) , PT1PS interrupt is enable
+  RTCPS0CTL &= ~(0x0100);           // Start RTCPS0
+  RTCPS1CTL &= ~(0x0100);           // Start RTCPS1
+  RTCCTL01 &= ~(RTCHOLD);           // Start RTC calendar mode
+
+  //LCD initial
+  lcdreset();
+
+  __bis_SR_register(LPM3_bits + GIE);       // Enter LPM3 mode with interrupts
+                                            // enabled
+  // __no_operation(); just don't wanna do "NOP" command
+}
+
+#pragma vector=RTC_VECTOR
+__interrupt void RTC_ISR(void)
+{
+	short vector=RTCIV;
+	switch(vector)
+	{
+	case RTC_NONE:                          // No interrupts
+		break;
+	case RTC_RTCRDYIFG:                     // RTCRDYIFG  , RTC ready interrupt flag     , in this case it's disabled.
+		break;
+	case RTC_RTCTEVIFG:                     // RTCEVIFG   , RTC interval interrupt flag  , in this case it's disabled.
+      break;
+    case RTC_RTCAIFG:                       // RTCAIFG    , RTC user alarm interrupt flag
+    	                                    // here i don't understand , why am i change alarm time , it will trigger RTCAIFG ?
+                                            // So, we let change alarm time's interrupt is disabled.
+    	if(Alarm_once==0){                  // If this interrupt trigger source isn't from change alarm time.
+    		timeout_flag=1;
+    	}
+    	else if(Alarm_once==1){             // Else if this interrupt trigger source is from change alarm time.
+    		Alarm_once=0;
+    	}
+      break;
+    case RTC_RT0PSIFG:                      // RT0PSIFG   , RTC prescaler 0 interrupt flag , in this case it's disabled.
+      break;
+    case RTC_RT1PSIFG:                      // RT1PSIFG   , RTC prescaler 1 interrupt flag
+    	                                    // In this case , this interrupt trigger frequency is 4Hz , equal 4 per second
+    	if(timeout_flag==0){                // If user alarm isn't timeout
+    		if(Clock_Mode==0){              // If in Mode 1 , Clock_Mode=0 is in Mode 1
+    			Year=RTCYEAR;               //                Clock_Mode=1 is in Mode 2
+    			Mon=RTCMON;                 //                Clock_Mode=2 is in Mode 3
+    			Day=RTCDAY;
+    			Week=RTCDOW;
+    			Hour=RTCHOUR;
+    			Min=RTCMIN;
+    			Sec=RTCSEC;
+    			Mode_1();
+    		}
+    		if(Clock_Mode==1){              // If in Mode 2
+    			RTCMON =Mon;
+    			RTCDAY =Day;
+    			RTCDOW =Week;
+    			RTCHOUR=Hour;
+    			RTCMIN =Min;
+    			RTCSEC =Sec;
+    			if(P21_flag==1)             // If KEY2 is pressed. so we know user wanna setting Clock time
+    				Clock_Setting_Count++;  // Next unit
+    			if(Clock_Setting_Count>=5)  // If overflow
+    				Clock_Setting_Count=0;
+    			P21_flag=0;                 // Initial KEY1 pressed flag.
+    			Mode_2();                   // Do Mode 2 function
+    		}
+    		if(Clock_Mode==2){              // If in Mode 3
+    			ADC12CTL0 |= ADC12SC;       // Trigger ADC interrupt
+    			if(P21_flag==1)             // If KEY2 is pressed. so we know user wanna setting Alarm time
+    				Clock_Setting_Count++;  // Like Mode 1 case
+    			if(Clock_Setting_Count>=5)
+    				Clock_Setting_Count=0;
+    			P21_flag=0;
+    			Mode_1();
+    			Mode_3();
+    		}
+    		//lcd print
+    		lcdreset();                     // LCD initialize
+    		lcdwda(0,0,printt1);            // print message
+    		lcdwda(0,1,printt2);            // print message
+    		if(P20_flag==1){                // If KEY1 is pressed. so we know user wanna change mode.
+    			Clock_Setting_Count=0;      // Initial Setting unit index
+				if(Clock_Mode==2){                         // If we change mode to mode 1 from Mode 3
+					RTCAHOUR &= ~(RTCAE);                  // RTC Alarm Hour unit is disabled.
+					RTCAMIN &= ~(RTCAE);                   // RTC Alarm Minute unit is disabled.
+					RTCCTL01 &=   ~ (RTCAIE +RTCAIFG) ;    // RTC alarm interrupt is disabled.
+					RTCCTL01 |= (RTCHOLD);                 // Hold RTC counter
+					RTCAHOUR = aHour+RTCAE;                // Change RTC alarm Hour unit and enable.
+					RTCAMIN = aMin+RTCAE;                  // Change RTC alarm minute unit and enable.
+					RTCCTL01 |=   RTCAIE + RTCAIFG ;       // RTC alarm interrput is enable.
+					RTCCTL01 &= ~(RTCHOLD);                // RTC counter is started.
+					Alarm_once=1;                          // RTC change alarm trigger interrupt flag .
+				}
+    			if(flag_05==0){              // If word status is printed.
+    				Clock_Mode++;
+    				P20_flag=0;
+    			}
+    			if(Clock_Mode>=3)            // If Clock mode is overflow
+    				Clock_Mode=0;
+    		}
+    		// Create 0.5 second flicker
+    		// This interrupt is trigger 0.25 second
+    		// So, 0.25 * 2 = 0.5 second
+    		if(count_05<=1){                 // when count equal 0 or 1
+    			flag_05=0;
+    		}
+    		else if(count_05>=2){            // when count equal 2 or 3
+    			flag_05=1;
+    		}
+    		count_05++;                      // count++ , when every 0.25 second
+    		if(count_05>=4)                  // If count overflow
+    			count_05=0;
+    	}
+    	else if(timeout_flag==1){            // If user alarm is timeout
+    		count_10++;                      // Count++ , when every 0.25 second
+            lcdreset();
+            if(count_10%2==1){               // LCD and LED flicker every 0.25 second
+            	P5OUT= (BIT4+BIT5);
+                lcdwda(0,0,printt1);
+                lcdwda(0,1,printt2);
+            	flag_05=0;
+            }
+            else if(count_10%2==0){
+            	P5OUT= ~(BIT4+BIT5);
+                lcdwda(0,0,line1);
+                lcdwda(0,1,line2);
+            	flag_05=1;
+            }
+            if(count_10>=40){                // count++ , when every 0.25 second
+            	                             // So, 0.25 * 40 = 10 second
+            	count_10=0;
+            	timeout_flag=0;
+            }
+    	}
+      break;
+    default: break;
+  }
+
+}
+
+// Port 2 interrupt service routine
+#pragma vector=PORT2_VECTOR
+__interrupt void Port_2(void)
+{                                          // This interrupt trigger when KEY1 , KEY2 , KEY3 and KEY4 is pressed (High to Low).
+  //debounce
+  __delay_cycles(20000); //~20mSec
+  if ((P2IN & 0x01) != 0x01)
+  	P20_flag=1;
+  if ((P2IN & 0x02) != 0x02)
+  	P21_flag=1;
+  if ((P2IN & 0x04) != 0x04)
+  	P22_flag=1;
+  if ((P2IN & 0x08) != 0x08)
+  	P23_flag=1;
+  P2IFG &= ~0x0FF;                         // P2.x IFG cleared
+}
+
+void Mode_1 (){                            // Normal mode
+	switch(RTCMON){                        // Setting month string
+	case 1:
+		printt1[0]='J';
+		printt1[1]='a';
+		printt1[2]='n';
+		break;
+	case 2:
+		printt1[0]='F';
+		printt1[1]='e';
+		printt1[2]='b';
+		break;
+	case 3:
+		printt1[0]='M';
+		printt1[1]='a';
+		printt1[2]='r';
+		break;
+	case 4:
+		printt1[0]='A';
+		printt1[1]='p';
+		printt1[2]='r';
+		break;
+	case 5:
+		printt1[0]='M';
+		printt1[1]='a';
+		printt1[2]='y';
+		break;
+	case 6:
+		printt1[0]='J';
+		printt1[1]='u';
+		printt1[2]='n';
+		break;
+	case 7:
+		printt1[0]='J';
+		printt1[1]='u';
+		printt1[2]='l';
+		break;
+	case 8:
+		printt1[0]='A';
+		printt1[1]='u';
+		printt1[2]='g';
+		break;
+	case 9:
+		printt1[0]='S';
+		printt1[1]='e';
+		printt1[2]='p';
+		break;
+	case 0x10:
+		printt1[0]='O';
+		printt1[1]='c';
+		printt1[2]='t';
+		break;
+	case 0x11:
+		printt1[0]='N';
+		printt1[1]='o';
+		printt1[2]='v';
+		break;
+	case 0x12:
+		printt1[0]='D';
+		printt1[1]='e';
+		printt1[2]='c';
+		break;
+	}
+	// Setting other about time unit
+	printt1[3]='.';
+	printt1[4]=NumberToChar((RTCDAY&0xf0)>>4);
+	printt1[5]=NumberToChar((RTCDAY&0x0f)>>0);
+	printt1[6]=' ';
+	printt1[7]=NumberToChar((RTCHOUR&0xf0)>>4);
+	printt1[8]=NumberToChar((RTCHOUR&0x0f)>>0);
+	// Let ":" flicker
+	if(flag_05==1)
+		printt1[9]=':';
+	else if(flag_05==0)
+		printt1[9]=' ';
+	printt1[10]=NumberToChar((RTCMIN&0xf0)>>4);
+	printt1[11]=NumberToChar((RTCMIN&0x0f)>>0);
+	if(flag_05==1)
+		printt1[12]=':';
+	else if(flag_05==0)
+		printt1[12]=' ';
+	printt1[13]=NumberToChar((RTCSEC&0xf0)>>4);
+	printt1[14]=NumberToChar((RTCSEC&0x0f)>>0);
+	printt1[15]=' ';
+	if(Clock_Mode==0){
+		if(flag_05==0)
+			P5OUT= ~BIT5;
+		if(flag_05==1)
+			P5OUT= ~BIT4;
+	}
+}
+void Mode_2 (){                            // Change clock time mode
+	if(flag_05==0){                        // 0.5 Second flicker
+		if(Clock_Setting_Count==0){        // clock setting unit index
+			if(P22_flag==1){               // If KEY3 is pressed. so, we will add this index value
+				P22_flag=0;
+				Mon=HexToInt(Mon);         // Hex to Integer
+				Mon++;
+				if(Mon>12)                 // If Month is overflow
+					Mon=1;
+				Mon=IntToHex(Mon);         // Integer to Hex
+			}
+			if(P23_flag==1){               // If KEY4 is pressed. this index value will subtract
+				Mon=HexToInt(Mon);
+				Mon--;
+				if(Mon<1)
+					Mon=12;
+				Mon=IntToHex(Mon);
+				P23_flag=0;
+			}
+		}
+		switch(Mon){
+	    		case 1:
+	    			printt1[0]='J';
+	    			printt1[1]='a';
+	    			printt1[2]='n';
+	    			break;
+	    		case 2:
+	    			printt1[0]='F';
+	    			printt1[1]='e';
+	    			printt1[2]='b';
+	    			break;
+	    		case 3:
+	    			printt1[0]='M';
+	    			printt1[1]='a';
+	    			printt1[2]='r';
+	    		break;
+	    		case 4:
+	    			printt1[0]='A';
+	    			printt1[1]='p';
+	    			printt1[2]='r';
+	    		break;
+	    		case 5:
+	    			printt1[0]='M';
+	    			printt1[1]='a';
+	    			printt1[2]='y';
+	    		break;
+	    		case 6:
+	    			printt1[0]='J';
+	    			printt1[1]='u';
+	    			printt1[2]='n';
+	    		break;
+	    		case 7:
+	    			printt1[0]='J';
+	    			printt1[1]='u';
+	    			printt1[2]='l';
+	    		break;
+	    		case 8:
+	    			printt1[0]='A';
+	    			printt1[1]='u';
+	    			printt1[2]='g';
+	    		break;
+	    		case 9:
+	    			printt1[0]='S';
+	    			printt1[1]='e';
+	    			printt1[2]='p';
+	    		break;
+	    		case 0x10:
+	    			printt1[0]='O';
+	    			printt1[1]='c';
+	    			printt1[2]='t';
+	    		break;
+	    		case 0x11:
+	    			printt1[0]='N';
+	    			printt1[1]='o';
+	    			printt1[2]='v';
+	    		break;
+	    		case 0x12:
+	    			printt1[0]='D';
+	    			printt1[1]='e';
+	    			printt1[2]='c';
+	    		break;
+	    		}
+	    	}
+			else if(flag_05==1 && Clock_Setting_Count==0){     // 0.5 Second flicker
+				printt1[0]=' ';
+				printt1[1]=' ';
+				printt1[2]=' ';
+			}
+	// change now unit value and create flicker
+	printt1[3]='.';
+	if(flag_05==0 ){
+		if(Clock_Setting_Count==1){
+		if(P22_flag==1){
+			Day=HexToInt(Day);
+			Day++;
+			if(Day>MonAndDayCheck(Day))
+				Day=1;
+			Day=IntToHex(Day);
+			P22_flag=0;
+		}
+		if(P23_flag==1){
+			Day=HexToInt(Day);
+			Day--;
+			if(Day<1)
+				Day=MonAndDayCheck(Day);
+			Day=IntToHex(Day);
+			P23_flag=0;
+		}
+		}
+		printt1[4]=NumberToChar((Day&0xf0)>>4);
+		printt1[5]=NumberToChar((Day&0x0f)>>0);
+	}
+	else if(flag_05==1 && Clock_Setting_Count==1){
+		printt1[4]=' ';
+		printt1[5]=' ';
+	}
+	printt1[6]=' ';
+	if(flag_05==0 ){
+		if( Clock_Setting_Count==2){
+		if(P22_flag==1){
+			Hour=HexToInt(Hour);
+			Hour++;
+			if(Hour>23)
+				Hour=0;
+			Hour=IntToHex(Hour);
+			P22_flag=0;
+		}
+		if(P23_flag==1){
+			Hour=HexToInt(Hour);
+			Hour--;
+			if(Hour<0)
+				Hour=23;
+			Hour=IntToHex(Hour);
+			P23_flag=0;
+		}
+		}
+		printt1[7]=NumberToChar((Hour&0xf0)>>4);
+		printt1[8]=NumberToChar((Hour&0x0f)>>0);
+	}
+	else if(flag_05==1 && Clock_Setting_Count==2){
+		printt1[7]=' ';
+		printt1[8]=' ';
+	}
+	printt1[9]=':';
+	if(flag_05==0 ){
+		if( Clock_Setting_Count==3){
+		if(P22_flag==1){
+			Min=HexToInt(Min);
+			Min++;
+			if(Min>59)
+				Min=0;
+			Min=IntToHex(Min);
+			P22_flag=0;
+		}
+		if(P23_flag==1){
+			Min=HexToInt(Min);
+			Min--;
+			if(Min<0)
+				Min=59;
+			Min=IntToHex(Min);
+			P23_flag=0;
+		}
+		}
+		printt1[10]=NumberToChar((Min&0xf0)>>4);
+		printt1[11]=NumberToChar((Min&0x0f)>>0);
+	}
+	else if(flag_05==1 && Clock_Setting_Count==3){
+		printt1[10]=' ';
+		printt1[11]=' ';
+	}
+	printt1[12]=':';
+	if(flag_05==0 ){
+		if( Clock_Setting_Count==4){
+		if(P22_flag==1){
+			Sec=HexToInt(Sec);
+			Sec++;
+			if(Sec>59)
+				Sec=0;
+			Sec=IntToHex(Sec);
+			P22_flag=0;
+		}
+		if(P23_flag==1){
+			Sec=HexToInt(Sec);
+			Sec--;
+			if(Sec<0)
+				Sec=59;
+			Sec=IntToHex(Sec);
+			P23_flag=0;
+		}}
+		printt1[13]=NumberToChar((Sec&0xf0)>>4);
+		printt1[14]=NumberToChar((Sec&0x0f)>>0);
+	}
+	else if(flag_05==1 && Clock_Setting_Count==4){
+		printt1[13]=' ';
+		printt1[14]=' ';
+	}
+	printt1[15]=' ';
+	P5OUT|=BIT5;
+}
+void Mode_3 (){                            // This mode like mode 2 , only difference is trigger addition or subtraction
+	if(flag_05==0){
+		if(Clock_Setting_Count==0){
+			if(ADC_a==1){                  // If ADC_a equals 1 , this is addition message
+				ADC_a=0;
+				aMon=HexToInt(aMon);
+				aMon++;
+				if(aMon>12)
+					aMon=1;
+				aMon=IntToHex(aMon);
+			}
+			if(ADC_d==1){                  // If ADC_d equals 1, this is subtraction message
+				aMon=HexToInt(aMon);
+				aMon--;
+				if(aMon<1)
+					aMon=12;
+				aMon=IntToHex(aMon);
+				ADC_d=0;
+			}
+		}
+		switch(aMon){
+	    		case 1:
+	    			printt2[0]='J';
+	    			printt2[1]='a';
+	    			printt2[2]='n';
+	    			break;
+	    		case 2:
+	    			printt2[0]='F';
+	    			printt2[1]='e';
+	    			printt2[2]='b';
+	    			break;
+	    		case 3:
+	    			printt2[0]='M';
+	    			printt2[1]='a';
+	    			printt2[2]='r';
+	    		break;
+	    		case 4:
+	    			printt2[0]='A';
+	    			printt2[1]='p';
+	    			printt2[2]='r';
+	    		break;
+	    		case 5:
+	    			printt2[0]='M';
+	    			printt2[1]='a';
+	    			printt2[2]='y';
+	    		break;
+	    		case 6:
+	    			printt2[0]='J';
+	    			printt2[1]='u';
+	    			printt2[2]='n';
+	    		break;
+	    		case 7:
+	    			printt2[0]='J';
+	    			printt2[1]='u';
+	    			printt2[2]='l';
+	    		break;
+	    		case 8:
+	    			printt2[0]='A';
+	    			printt2[1]='u';
+	    			printt2[2]='g';
+	    		break;
+	    		case 9:
+	    			printt2[0]='S';
+	    			printt2[1]='e';
+	    			printt2[2]='p';
+	    		break;
+	    		case 0x10:
+	    			printt2[0]='O';
+	    			printt2[1]='c';
+	    			printt2[2]='t';
+	    		break;
+	    		case 0x11:
+	    			printt2[0]='N';
+	    			printt2[1]='o';
+	    			printt2[2]='v';
+	    		break;
+	    		case 0x12:
+	    			printt2[0]='D';
+	    			printt2[1]='e';
+	    			printt2[2]='c';
+	    		break;
+	    		}
+	    	}
+			else if(flag_05==1 && Clock_Setting_Count==0){
+				printt2[0]=' ';
+				printt2[1]=' ';
+				printt2[2]=' ';
+			}
+
+	printt2[3]='.';
+	if(flag_05==0 ){
+		if(Clock_Setting_Count==1){
+		if(ADC_a==1){
+			aDay=HexToInt(aDay);
+			aDay++;
+			if(aDay>MonAndDayCheck(aDay))
+				aDay=1;
+			aDay=IntToHex(aDay);
+			ADC_a=0;
+		}
+		if(ADC_d==1){
+			aDay=HexToInt(aDay);
+			aDay--;
+			if(aDay<1)
+				aDay=MonAndDayCheck(aDay);
+			aDay=IntToHex(aDay);
+			ADC_d=0;
+		}
+		}
+		printt2[4]=NumberToChar((aDay&0xf0)>>4);
+		printt2[5]=NumberToChar((aDay&0x0f)>>0);
+	}
+	else if(flag_05==1 && Clock_Setting_Count==1){
+		printt2[4]=' ';
+		printt2[5]=' ';
+	}
+	printt2[6]=' ';
+	if(flag_05==0 ){
+		if( Clock_Setting_Count==2){
+		if(ADC_a==1){
+			aHour=HexToInt(aHour);
+			aHour++;
+			if(aHour>23)
+				aHour=0;
+			aHour=IntToHex(aHour);
+			ADC_a=0;
+		}
+		if(ADC_d==1){
+			aHour=HexToInt(aHour);
+			aHour--;
+			if(aHour<0)
+				aHour=23;
+			aHour=IntToHex(aHour);
+			ADC_d=0;
+		}
+		}
+		printt2[7]=NumberToChar((aHour&0xf0)>>4);
+		printt2[8]=NumberToChar((aHour&0x0f)>>0);
+	}
+	else if(flag_05==1 && Clock_Setting_Count==2){
+		printt2[7]=' ';
+		printt2[8]=' ';
+	}
+	printt2[9]=':';
+	if(flag_05==0 ){
+		if( Clock_Setting_Count==3){
+		if(ADC_a==1){
+			aMin=HexToInt(aMin);
+			aMin++;
+			if(aMin>59)
+				aMin=0;
+			aMin=IntToHex(aMin);
+			ADC_a=0;
+		}
+		if(ADC_d==1){
+			aMin=HexToInt(aMin);
+			aMin--;
+			if(aMin<0)
+				aMin=59;
+			aMin=IntToHex(aMin);
+			ADC_d=0;
+		}
+		}
+		printt2[10]=NumberToChar((aMin&0xf0)>>4);
+		printt2[11]=NumberToChar((aMin&0x0f)>>0);
+	}
+	else if(flag_05==1 && Clock_Setting_Count==3){
+		printt2[10]=' ';
+		printt2[11]=' ';
+	}
+	printt2[12]=':';
+	if(flag_05==0 ){
+		if( Clock_Setting_Count==4){
+		if(ADC_a==1){
+			aSec=HexToInt(aSec);
+			aSec++;
+			if(aSec>59)
+				aSec=0;
+			aSec=IntToHex(aSec);
+			ADC_a=0;
+		}
+		if(ADC_d==1){
+			aSec=HexToInt(aSec);
+			aSec--;
+			if(aSec<0)
+				aSec=59;
+			aSec=IntToHex(aSec);
+			ADC_d=0;
+		}}
+		printt2[13]=NumberToChar((aSec&0xf0)>>4);
+		printt2[14]=NumberToChar((aSec&0x0f)>>0);
+	}
+	else if(flag_05==1 && Clock_Setting_Count==4){
+		printt2[13]=' ';
+		printt2[14]=' ';
+	}
+	printt2[15]=' ';
+
+
+	P5OUT|=BIT4;
+}
+int HexToInt(int Hex){                            // This function is convert Hex to Integer
+	int num=0;
+	num+=((Hex/16)%10)*10;
+	num+=(Hex%16);
+	return num;
+}
+int IntToHex(int Int){                            // This function is convert Integer to Hex
+	int Hex=0;
+	Hex+=((Int/10)%10)<<4;
+	Hex+=Int%10;
+	return Hex;
+}
+int MonAndDayCheck(int mon){                      // This function will return every month's total days
+	int day=0;
+	if(mon<=6){
+		if(mon%2==0)
+			day=30;
+		else
+			day=31;
+	}
+	if(mon==2)
+		day=28;
+	if(mon==7 || mon==8){
+		day=31;
+	}
+	if(mon>=9){
+		if(mon%2==0)
+			day=31;
+		else
+			day=30;
+	}
+	return day;
+}
+
+#pragma vector=ADC12_VECTOR
+__interrupt void ADC12ISR (void)
+{
+  switch(__even_in_range(ADC12IV,34))
+  {
+  case  6:                                     // Vector  6:  ADC12IFG0
+	  if(ADC_onceflag==0){                     // Set ADC compare value , when first trigger
+		  ADC_compare=ADC12MEM0;
+		  ADC_onceflag=1;
+	  }
+       results = ADC12MEM0;                    // Let results equals ADC value
+
+
+       if(ADC_changecount>=7){                 // Compare ADC now value , when every 2 second
+    	   if(results>ADC_compare+20){         // When ADC now value > ADC compare value +20 , i'm lazed compute 15 degree
+    		   ADC_a=1;
+    	   }
+    	   else if(results<ADC_compare-20){
+    		   ADC_d=1;
+    	   }
+    	   ADC_changecount=0;
+       }
+       else
+    	   ADC_changecount++;
+
+      __bic_SR_register_on_exit(LPM4_bits);   // Exit active CPU, SET BREAKPOINT HERE
+
+  default: break;
+  }
+}
+
+

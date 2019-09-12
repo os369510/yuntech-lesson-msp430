@@ -1,0 +1,42 @@
+#include "msp430x54x.h"
+
+void main(void)
+{
+  WDTCTL = WDTPW + WDTHOLD;             // Stop Watchdog Timer
+   P7SEL |= 0x03;                            // XT1 
+  // Loop until 32kHz crystal stabilizes
+  while ( (SFRIFG1 &OFIFG))                 // Test oscillator fault flag 
+  {    
+    UCSCTL7 &= ~(XT2OFFG + XT1LFOFFG + DCOFFG);
+    SFRIFG1 &= ~OFIFG;                      // Clear fault flags
+  }
+
+  RTCCTL01 = RTCBCD+RTCHOLD+RTCMODE+RTCTEVIE+RTCAIE;
+                                        // RTC enable, BCD mode,
+                                        // alarm every Minute,
+                                        // enable RTC interrupt
+  // Init time
+  RTCSEC =  0x00;                       // Set Seconds
+  RTCMIN =  0x32;                       // Set Minutes
+  RTCHOUR = 0x10;                       // Set Hours
+
+  // Init date
+  RTCDOW =  0x03;                       // Set DOW
+  RTCDAY =  0x30;                       // Set Day
+  RTCMON =  0x04;                       // Set Month
+  RTCYEAR = 0x2010;                     // Set Year
+
+  RTCCTL01 &= ~RTCHOLD;                 // Enable RTC
+
+  P5DIR |= BIT5;                        // Set P5.5 to output direction
+
+  __bis_SR_register(LPM3_bits + GIE);   // Enter LPM3 w/ interrupt
+}
+
+// Basic Timer interrupt service routine
+#pragma vector=RTC_VECTOR
+__interrupt void RTC(void)
+{
+  P5OUT ^= 0x20;                        // Toggle P5.5 using exclusive-OR
+  RTCCTL01 &= ~RTCTEVIFG;
+}

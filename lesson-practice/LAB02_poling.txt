@@ -1,0 +1,17 @@
+#include "msp430x54x.h"
+
+void main(void)
+{
+  WDTCTL = WDTPW + WDTHOLD;		// Stop watchdog timer
+  P2DIR &= ~BIT0;
+  P2REN |= BIT0;
+  P2OUT |= BIT0;
+  P5DIR |= (BIT4+BIT5);			// Set P5.4/5 to output direction
+  while (1)                                
+  {
+    if (BIT0 & P2IN)
+      P5OUT = BIT5;			// if P2.0 set, set P5.5
+    else
+      P5OUT = BIT4;			// else D2 light
+  }
+}

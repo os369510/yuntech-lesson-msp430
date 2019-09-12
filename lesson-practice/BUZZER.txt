@@ -1,0 +1,14 @@
+#include "msp430x54x.h"
+
+void main(void)
+{
+  WDTCTL = WDTPW + WDTHOLD;                 // Stop WDT
+  P8DIR |= 0x60;                            // P8.5 and P8.6 output
+  P8SEL |= 0x60;                            // P8.5 and P8.6 TA1.0/TA1.1 otions
+  TA1CCR0 = 1000-1;                         // PWM Period
+  TA1CCTL1 = OUTMOD_7;                      // CCR1 reset/set
+  TA1CCR1 = 500;                            // CCR1 PWM duty cycle
+  TA1CTL = TASSEL_2 + MC_1;                 // SMCLK, up mode
+
+  _BIS_SR(LPM3_bits);                       // Enter LPM3
+}

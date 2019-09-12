@@ -1,0 +1,64 @@
+#include "msp430x54x.h"
+//這是MASTER的程式碼
+unsigned char MST_Data,SLV_Data;
+
+void main(void)
+{
+  WDTCTL = WDTPW+WDTHOLD;                   // Stop watchdog timer
+
+  P1OUT |= BIT1;                            // Set P1.1 for slave reset
+  P1DIR |= BIT1;                            // Set P1.1 to output direction
+  P2OUT &=~BIT5;                            // OutPut LED
+  P2DIR |= BIT5; 
+  P9SEL |= BIT0+BIT4+BIT5;                  // P9.5,4,0 option select ,  UCA2 (CLK,MISO,MOSI)
+
+  UCA2CTL1 |= UCSWRST;                      // **Put state machine in reset**    Softwave reset
+  UCA2CTL0 |= UCMST+UCSYNC+UCCKPL+UCMSB;    // 3-pin, 8-bit SPI master
+                                            // Clock polarity high, MSB
+ // Master mode, Synchronous Mode , The inactive state is high , MSB first bit
+  UCA2CTL1 |= UCSSEL_2;                     // SMCLK
+  UCA2BR0 = 0x02;                           // /2
+  UCA2BR1 = 0;                              //
+  UCA2MCTL = 0;                             // No modulation
+  UCA2CTL1 &= ~UCSWRST;                     // **Initialize USCI state machine**        USCI disable
+  UCA2IE |= UCRXIE;                         // Enable USCI_A0 RX interrupt       Receiver
+
+  P1OUT &= ~0x02;                           // Now with SPI signals initialized,
+  P1OUT |= 0x02;                            // reset slave
+
+  __delay_cycles(100);                      // Wait for slave to initialize
+
+  MST_Data = 0x01;                          // Initialize data values
+  SLV_Data = 0x00;                          //
+
+  while (!(UCA2IFG&UCTXIFG));               // USCI_A0 TX buffer ready?
+  UCA2TXBUF = MST_Data;                     // Transmit first character
+
+  __bis_SR_register(LPM0_bits + GIE);       // CPU off, enable interrupts
+}
+
+#pragma vector=USCI_A2_VECTOR
+__interrupt void USCI_A2_ISR(void)  
+{
+  switch(__even_in_range(UCA2IV,4))
+  {
+    case 0: break;                          // Vector 0 - no interrupt
+    case 2:                                 // Vector 2 - RXIFG
+      while (!(UCA2IFG&UCTXIFG));           // USCI_A0 TX buffer ready?
+
+      if (UCA2RXBUF==SLV_Data)              // Test for correct character RX'd
+        P2OUT != BIT5;                      // If correct, light LED
+      else
+        P2OUT &=~BIT5;                     // If incorrect, clear LED
+
+      MST_Data++;                           // Increment data
+      SLV_Data++;
+      UCA2TXBUF = MST_Data;                 // Send next value
+
+      __delay_cycles(40);                   // Add time between transmissions to
+                                            // make sure slave can process information
+      break;
+    case 4: break;                          // Vector 4 - TXIFG
+    default: break;
+  }
+}

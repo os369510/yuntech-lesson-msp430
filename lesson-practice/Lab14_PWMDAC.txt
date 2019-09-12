@@ -1,0 +1,74 @@
+#include  "msp430x54x.h"
+#define    OPA_EN      BIT0
+unsigned int SINE_TABLE[]={255,246,234,219,199,177,153,128,103,79, 
+                            57, 37, 22, 10,  1,  1, 10, 22, 37,
+                            57, 79,103,128,153,177,199,219,234,246,
+                           255};
+unsigned int sine_counter=0;
+void main(void)
+{
+  WDTCTL = WDTPW+WDTHOLD;                   // Stop WDT
+
+  
+ // Initialize LFXT1
+  P7SEL |= 0x03;                            // Select XT1
+  UCSCTL6 &= ~(XT1OFF);                     // XT1 On
+  UCSCTL6 |= XCAP_3;                        // Internal load cap
+
+  // Loop until XT1 fault flag is cleared
+  do
+  {
+    UCSCTL7 &= ~XT1LFOFFG;                  // Clear XT1 fault flags
+  }while (UCSCTL7&XT1LFOFFG);               // Test XT1 fault flag
+
+  // Initialize DCO to 2.45MHz
+  __bis_SR_register(SCG0);                  // Disable the FLL control loop
+  UCSCTL0 = 0x0000;                         // Set lowest possible DCOx, MODx
+  UCSCTL1 = DCORSEL_3;                      // Set RSELx for DCO = 4.9 MHz
+  UCSCTL2 = FLLD_1 + 62;                    // Set DCO Multiplier for 2.06MHz
+                                            // (N + 1) * FLLRef = Fdco
+                                            // (62 + 1) * 32768 = 2.06MHz
+                                            // Set FLL Div = fDCOCLK/2
+  __bic_SR_register(SCG0);                  // Enable the FLL control loop
+
+  // Worst-case settling time for the DCO when the DCO range bits have been
+  // changed is n x 32 x 32 x f_MCLK / f_FLL_reference. See UCS chapter in 5xx
+  // UG for optimization.
+  // 32 x 32 x 2.06 MHz / 32,768 Hz = 64512 = MCLK cycles for DCO to settle
+  __delay_cycles(64512);
+
+  // Loop until XT1,XT2 & DCO fault flag is cleared
+  do
+  {
+    UCSCTL7 &= ~(XT2OFFG + XT1LFOFFG + XT1HFOFFG + DCOFFG);
+                                            // Clear XT2,XT1,DCO fault flags
+    SFRIFG1 &= ~OFIFG;                      // Clear fault flags
+  }while (SFRIFG1&OFIFG);                   // Test oscillator fault flag
+
+  P8DIR |= BIT0+BIT1+BIT2+BIT3+BIT4;       // P8.0~4 output
+  P8SEL |= BIT1+BIT2+BIT3+BIT4;;           // P8.1~4 output
+  P8OUT |= OPA_EN;
+  TA0CCR0 = 256 - 1;                       // PWM Period 8KHz
+  TA0CCTL0 = CCIE;
+  TA0CCTL1 = OUTMOD_7;                      // TACCR1 reset/set
+  TA0CCR1 = 0;                             // TACCR1 PWM duty cycle
+  TA0CCTL2 = OUTMOD_7;                      // TACCR2 reset/set
+  TA0CCR2 = 128;                           // TACCR2 PWM duty cycle
+  TA0CCTL3 = OUTMOD_7;                      // TACCR3 reset/set
+  TA0CCR3 = 64;                             // TACCR3 PWM duty cycle
+  TA0CCTL4 = OUTMOD_7;                      // TACCR4 reset/set
+  TA0CCR4 = 192;                             // TACCR4 PWM duty cycle
+  TA0CTL = TASSEL_2 + MC_1;                 // SMCLK, up mode
+  __bis_SR_register(LPM0_bits + GIE);       // Enter LPM0, enable interrupts
+  __no_operation();                         // For debugger
+}
+
+// Timer A0 interrupt service routine
+#pragma vector=TIMER0_A0_VECTOR
+__interrupt void TIMER0_A0_ISR(void)
+{ 
+  TA0CCR1 = SINE_TABLE[sine_counter];
+  sine_counter =sine_counter+1;
+  if (sine_counter>=30){sine_counter=0;}
+}
+

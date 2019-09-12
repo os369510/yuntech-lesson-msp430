@@ -1,0 +1,42 @@
+#include "msp430x54x.h"
+
+volatile long temp;
+volatile long IntDegC;
+
+void main(void)
+{
+  WDTCTL = WDTPW + WDTHOLD;                                                // Stop WDT
+  ADC12CTL0 = ADC12SHT0_8 + ADC12REFON + ADC12ON;        // Internal ref = 1.5V
+
+  ADC12CTL1 = ADC12SHP;                                                             // enable sample timer
+  ADC12MCTL0 = ADC12SREF_1 + ADC12INCH_10;                       // ADC i/p ch A10 = temp sense i/p
+  ADC12IE = 0x001;                                                                           // ADC_IFG upon conv result-ADCMEMO
+  ADC12CTL0 |= ADC12ENC;
+  while(1)
+  {
+    ADC12CTL0 |= ADC12SC;                                                            // Sampling and conversion start
+
+    __bis_SR_register(LPM4_bits + GIE);                                             // LPM0 with interrupts enabled
+
+    // Temperature in Celsius
+    // ((A10/4096*1500mV) - 894mV)*(1/3.66mV) = (A10/4096*410) - 244
+    // = (A10 - 2438) * (410 / 4096)
+    IntDegC = ((temp - 2438) * 410) / 4096;
+
+  }
+}
+
+#pragma vector=ADC12_VECTOR
+__interrupt void ADC12ISR (void)
+{
+  switch(__even_in_range(ADC12IV,34))
+  {
+case  6:                                                                                           // Vector  6:  ADC12IFG0
+    temp = ADC12MEM0;                                                                // Move results, IFG is cleared
+    __bic_SR_register_on_exit(LPM4_bits);                                       // Exit active CPU
+    break;
+case 34: break;                                                                                // Vector 34:  ADC12IFG14
+  default: break;
+  }
+}
+

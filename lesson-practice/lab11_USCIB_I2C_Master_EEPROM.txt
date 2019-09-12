@@ -1,0 +1,111 @@
+#include "msp430x54x.h"
+void IIC_Initial(void);
+unsigned char IIC_ReadByte(void);
+void IIC_writeByte(unsigned char data);
+void BYTE_WRITE(unsigned int  address,unsigned char data);
+void PAGE_WRITE(unsigned int  address );
+void Read_Data(unsigned int  address ,unsigned int num);
+void Current_Read_Data(void);
+unsigned char data[16] = {1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16};
+unsigned char data2[128] = {0,0,0,0,0,0,0,0,0,0};
+unsigned char data3;
+void main(void)
+{
+   WDTCTL = WDTPW+WDTHOLD;
+   P8DIR |= BIT7; //WP
+   P8OUT &=~BIT7; // DISABLE WP 
+   P9SEL |= BIT1+BIT2;                       // Assign I2C pins to USCI_B2
+   UCB2CTL1 |= UCSWRST;                      // Enable SW reset
+   UCB2CTL0 = UCMST + UCMODE_3 + UCSYNC;     // I2C Master, synchronous mode
+   UCB2CTL1 = UCSSEL_2 + UCSWRST;            // Use SMCLK, keep SW reset
+   UCB2BR0 = 10;                             // fSCL = SMCLK/10= ~100kHz
+   UCB2BR1 = 0;
+   UCB2I2CSA = 0x50;                         // Slave Address is 050h     (SA bit6 is the MSB)
+   UCB2CTL1 &= ~UCSWRST;                     // Clear SW reset, resume operation
+
+   //====EEPROM Section==========
+    PAGE_WRITE(0x00);
+    __delay_cycles(5000);//delay 5mSec
+     Read_Data(0x00,16);
+   //=============================
+   while(1); //trap CPU
+}
+
+
+unsigned char IIC_ReadByte(void)
+{ 
+  while ((UCB2IFG & UCRXIFG) == 0);            // Wait for USART0 RX buffer to receive a character
+  return (UCB2RXBUF);
+}
+
+void IIC_writeByte(unsigned char data)
+{
+  while ((UCB2IFG & UCTXIFG) == 0);            // Wait for USART0 TX buffer to become ready
+  UCB2TXBUF = data;                            // Send the data out
+}
+
+void BYTE_WRITE(unsigned int  address,unsigned char data)
+{
+  while (UCB2CTL1 & UCTXSTP);             // Ensure stop condition got sent
+  UCB2CTL1 |= UCTR + UCTXSTT;             // I2C TX, start condition                 
+  IIC_writeByte(address >> 8);           //sent address
+  IIC_writeByte(address); 
+  IIC_writeByte(data); 
+  while ((UCB2IFG & UCTXIFG) == 0);        
+  UCB2CTL1 |= UCTXSTP;                    // I2C stop condition
+  UCB2IFG &= ~UCTXIFG;                     // Clear USCI_B0 TX int flag
+}
+
+void PAGE_WRITE(unsigned int  address )
+{
+  unsigned int j;
+  while (UCB2CTL1 & UCTXSTP);             // Ensure stop condition got sent
+  UCB2CTL1 |= UCTR + UCTXSTT;             // I2C TX, start condition                   
+  IIC_writeByte(address >> 8);            //sent address
+  IIC_writeByte(address); 
+  for(j=0;j<64;j++)
+  {
+    IIC_writeByte(data[j]);
+  }
+  while ((UCB2IFG & UCTXIFG) == 0);        //wait for the last byte has been sent
+  UCB2CTL1 |= UCTXSTP;                     // I2C stop condition
+  UCB2IFG &= ~UCTXIFG;    
+}
+
+void Read_Data(unsigned int  address ,unsigned int num)
+{
+  unsigned int j = 0;
+  while (UCB2CTL1 & UCTXSTP);               // Ensure stop condition got sent
+  UCB2CTL1 |= UCTR + UCTXSTT;               // I2C TX, start condition
+  IIC_writeByte(address >> 8);              //sent address
+  IIC_writeByte(address); 
+  
+  while ((UCB2IFG & UCTXIFG) == 0);         //make sure the add has been sent
+  UCB2CTL1 &= ~UCTR;                        // I2C RX
+  UCB2CTL1 |= UCTXSTT;                      // I2C start condition  
+                                         
+  while(--num)                              // Decrement RX byte counter
+  {
+    data2[j] = IIC_ReadByte();              // Move RX data to address PRxData
+    j++;
+    if (num == 1)                           // Only one byte left?
+      UCB2CTL1 |= UCTXSTP;                  // Generate I2C stop condition
+  }
+  
+    data2[j] = IIC_ReadByte();              // Move final RX data to PRxData
+     
+}
+
+void Current_Read_Data(void)
+{
+  while (UCB2CTL1 & UCTXSTP);               // Ensure stop condition got sent
+  UCB2CTL1 &= ~UCTR;                        // I2C RX
+  UCB2CTL1 |=  UCTXSTT;                     // I2C TX, start condition
+                             
+  while (UCB2CTL1 & UCTXSTT);               // Start condition sent?
+  UCB2CTL1 |= UCTXSTP;  
+  
+  data3 = IIC_ReadByte();                   // Move final RX data to PRxData
+    
+  
+}

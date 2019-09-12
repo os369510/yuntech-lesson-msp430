@@ -1,0 +1,32 @@
+#include "msp430x54x.h"
+
+void main(void)
+{
+  WDTCTL = WDTPW + WDTHOLD;                 // Stop watchdog timer
+  P2DIR &= ~(BIT0);
+  P2REN |= (BIT0);
+  P2OUT |= (BIT0);
+  P2IE  |= (BIT0);
+  P2IES |= (BIT0); //High to Low
+  P2IFG =0;
+  P5DIR |= BIT4+BIT5;                       // Set P5.4/5 to output direction
+  P5OUT =0;
+  _EINT();
+  while (1)                               
+  {
+
+  }
+}
+
+// Port 2 interrupt service routine
+#pragma vector=PORT2_VECTOR
+__interrupt void Port_2(void)
+{
+  //debounce
+  __delay_cycles(20000); //~20mSec
+  if (!(P2IN & BIT0))
+  {
+  P5OUT ^= BIT5+BIT4;
+  }                    
+  P2IFG &= ~0x0FF;                         // P2.x IFG cleared
+}
