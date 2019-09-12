@@ -1,4 +1,4 @@
-##MSP430 Lesson  
+## MSP430 Lesson  
 I wasn't got the ticket of this lesson but I got the examination from  
  my colleague.
 This repo contains:
